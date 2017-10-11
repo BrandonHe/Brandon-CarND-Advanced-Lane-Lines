@@ -1,0 +1,911 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Advanced Lane Finding Project\n",
+    "\n",
+    "The goals / steps of this project are the following:\n",
+    "\n",
+    "* Compute the camera calibration matrix and distortion coefficients given a set of chessboard images.\n",
+    "* Apply a distortion correction to raw images.\n",
+    "* Use color transforms, gradients, etc., to create a thresholded binary image.\n",
+    "* Apply a perspective transform to rectify binary image (\"birds-eye view\").\n",
+    "* Detect lane pixels and fit to find the lane boundary.\n",
+    "* Determine the curvature of the lane and vehicle position with respect to center.\n",
+    "* Warp the detected lane boundaries back onto the original image.\n",
+    "* Output visual display of the lane boundaries and numerical estimation of lane curvature and vehicle position.\n",
+    "\n",
+    "---\n",
+    "## Compute the camera calibration using chessboard images"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 34,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import cv2\n",
+    "import glob\n",
+    "import pickle\n",
+    "import matplotlib.pyplot as plt\n",
+    "%matplotlib qt5\n",
+    "\n",
+    "# prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)\n",
+    "nx = 9 # the number of inside corners in x\n",
+    "ny = 6 # the number of inside corners in y\n",
+    "\n",
+    "objp = np.zeros((ny*nx,3), np.float32)\n",
+    "objp[:,:2] = np.mgrid[0:nx,0:ny].T.reshape(-1,2)\n",
+    "\n",
+    "# Arrays to store object points and image points from all the images.\n",
+    "objpoints = [] # 3d points in real world space\n",
+    "imgpoints = [] # 2d points in image plane.\n",
+    "\n",
+    "# Make a list of calibration images\n",
+    "images = glob.glob('./camera_cal/calibration*.jpg')\n",
+    "\n",
+    "# Step through the list and search for chessboard corners\n",
+    "for fname in images:\n",
+    "    img = cv2.imread(fname)\n",
+    "    gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)\n",
+    "\n",
+    "    # Find the chessboard corners\n",
+    "    ret, corners = cv2.findChessboardCorners(gray, (nx,ny),None)\n",
+    "\n",
+    "    # If found, add object points, image points\n",
+    "    if ret == True:\n",
+    "        objpoints.append(objp)\n",
+    "        imgpoints.append(corners)\n",
+    "\n",
+    "        # Draw and display the corners\n",
+    "        img = cv2.drawChessboardCorners(img, (nx,ny), corners, ret)\n",
+    "        cv2.imshow('img',img)\n",
+    "        #cv2.waitKey(500)\n",
+    "\n",
+    "#cv2.destroyAllWindows()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Apply a distortion correction to raw images\n",
+    "**Notice:**\n",
+    "- The road sign size and view of the two pictures\n",
+    "- The bottom of the two pictures"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 35,
+   "metadata": {
+    "collapsed": false,
+    "scrolled": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Finished undistorted test image\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Define a function for reading images\n",
+    "def read_image(file_path):\n",
+    "    img = cv2.imread(file_path) # flag 1 for color image, 0 for gray image\n",
+    "    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)\n",
+    "    return img\n",
+    "    \n",
+    "# Define a function for writing images\n",
+    "def write_image(path, img):\n",
+    "    if len(img.shape) > 2:\n",
+    "        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)\n",
+    "    else:\n",
+    "        img = 255 * img.astype(\"uint8\")\n",
+    "        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)\n",
+    "        \n",
+    "    cv2.imwrite(path, img)\n",
+    "    \n",
+    "# Define a function for undistortion raw images\n",
+    "def distortion_correction(img, objp, imgp):\n",
+    "    # gray.shape[::-1] returns the iamge size(hight x width)\n",
+    "    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objp, imgp, gray.shape[::-1], None, None)\n",
+    "    undst_corr = cv2.undistort(img, mtx, dist, None, mtx)\n",
+    "    return undst_corr\n",
+    "\n",
+    "# Test undistortion on test image\n",
+    "test_img = read_image(\"./test_images/test2.jpg\")\n",
+    "undist_test_img = distortion_correction(test_img, objpoints, imgpoints)\n",
+    "\n",
+    "\n",
+    "plt.figure(figsize=(12, 7))\n",
+    "plt.subplot(2, 2, 1)\n",
+    "plt.imshow(test_img)\n",
+    "plt.title(\"Raw Test Image\")\n",
+    "plt.subplot(2, 2, 2)\n",
+    "plt.imshow(undist_test_img)\n",
+    "plt.title(\"Distortion Test Correction\")\n",
+    "\n",
+    "write_image(\"output_images/undist_test_image.jpg\", undist_test_img)\n",
+    "print(\"Finished undistorted test image\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Use color transforms, gradients, etc., to create a thresholded binary image."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 36,
+   "metadata": {
+    "collapsed": false,
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "3\n",
+      "2\n",
+      "Finished threshold binary image\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Define a function that applies Sobel x or y, \n",
+    "# then takes an absolute value and applies a threshold.\n",
+    "# Note: calling your function with orient='x', thresh_min=5, thresh_max=100\n",
+    "# Calculate directional gradient\n",
+    "def abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(0, 255)):\n",
+    "    # 1) Convert to grayscale\n",
+    "    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)\n",
+    "    # 2) Take the derivative in x or y given orient = 'x' or 'y'\n",
+    "    # 3) Take the absolute value of the derivative or gradient\n",
+    "    x = (orient == 'x')\n",
+    "    y = (orient == 'y')\n",
+    "    abs_sobel = np.absolute(cv2.Sobel(gray, cv2.CV_64F, x, y))\n",
+    "    # 4) Scale to 8-bit (0 - 255) then convert to type = np.uint8\n",
+    "    scaled_sobel = np.uint8(255*abs_sobel/np.max(abs_sobel))\n",
+    "    # 5) Create a mask of 1's where the scaled gradient magnitude \n",
+    "            # is > thresh_min and < thresh_max\n",
+    "    grad_binary = np.zeros_like(scaled_sobel)\n",
+    "    grad_binary[(scaled_sobel >= thresh[0]) & (scaled_sobel <= thresh[1])] = 1\n",
+    "    # 6) Return this mask as your binary_output image\n",
+    "    return grad_binary\n",
+    "\n",
+    "# Define a function that applies Sobel x and y, \n",
+    "# then computes the magnitude of the gradient\n",
+    "# and applies a threshold\n",
+    "# Calculate gradient magnitude\n",
+    "def mag_thresh(img, sobel_kernel=3, thresh=(0, 255)):\n",
+    "    \n",
+    "    # Apply the following steps to img\n",
+    "    # 1) Convert to grayscale\n",
+    "    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)\n",
+    "    # 2) Take the gradient in x and y separately\n",
+    "    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)\n",
+    "    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)\n",
+    "    # 3) Calculate the magnitude \n",
+    "    gradmag = np.sqrt(sobelx**2 + sobely**2)\n",
+    "    # 4) Scale to 8-bit (0 - 255) and convert to type = np.uint8\n",
+    "    scale_factor = np.max(gradmag)/255 \n",
+    "    gradmag = (gradmag/scale_factor).astype(np.uint8)\n",
+    "    # 5) Create a binary mask where mag thresholds are met\n",
+    "    # 6) Return this mask as your binary_output image\n",
+    "    mag_binary = np.zeros_like(gradmag)\n",
+    "    mag_binary[(gradmag >= thresh[0]) & (gradmag <= thresh[1])] = 1\n",
+    "    return mag_binary\n",
+    "\n",
+    "# Define a function that applies Sobel x and y, \n",
+    "# then computes the direction of the gradient\n",
+    "# and applies a threshold.\n",
+    "# Calculate gradient direction\n",
+    "def dir_threshold(img, sobel_kernel=3, thresh=(0, np.pi/2)):\n",
+    "    \n",
+    "    # Apply the following steps to img\n",
+    "    # 1) Convert to grayscale\n",
+    "    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)\n",
+    "    # 2) Take the gradient in x and y separately\n",
+    "    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)\n",
+    "    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)\n",
+    "    # 3) Take the absolute value of the x and y gradients\n",
+    "    abs_sobelx = np.sqrt(sobelx**2)\n",
+    "    abs_sobely = np.sqrt(sobely**2)\n",
+    "    abssobel = np.sqrt(sobelx**2 + sobely**2)\n",
+    "    # 4) Use np.arctan2(abs_sobely, abs_sobelx) to calculate the direction of the gradient \n",
+    "    absgraddir = np.arctan2(abs_sobely, abs_sobelx)\n",
+    "    # 5) Create a binary mask where direction thresholds are met\n",
+    "    dir_binary = np.zeros_like(absgraddir)\n",
+    "    dir_binary[(absgraddir >= thresh[0]) & (absgraddir <= thresh[1])] = 1\n",
+    "    # 6) Return this mask as your binary_output image\n",
+    "    return dir_binary\n",
+    "\n",
+    "# Define a function that thresholds the S-channel of HLS\n",
+    "# Use exclusive lower bound (>) and inclusive upper (<=)\n",
+    "def hls_select(img, thresh=(0, 255)):\n",
+    "    # 1) Convert to HLS color space\n",
+    "    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)\n",
+    "    H = hls[:,:,0]\n",
+    "    L = hls[:,:,1]\n",
+    "    # 2) Apply a threshold to the S channel\n",
+    "    s_channel = hls[:,:,2]\n",
+    "    # 3) Return a binary image of threshold result\n",
+    "    color_binary = np.zeros_like(s_channel)\n",
+    "    color_binary[(s_channel > thresh[0]) & (s_channel <= thresh[1])] = 1\n",
+    "    #binary_output = np.copy(img) # placeholder line\n",
+    "    return color_binary\n",
+    "\n",
+    "# Choose a Sobel kernel size\n",
+    "ksize = 5 # Choose a larger odd number to smooth gradient measurements\n",
+    "\n",
+    "def get_combined_sobel(img):\n",
+    "    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=ksize, thresh=(60, 120))\n",
+    "    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=ksize, thresh=(20, 50))\n",
+    "    mag_binary = mag_thresh(img, sobel_kernel=ksize, thresh=(30, 500))\n",
+    "    dir_binary = dir_threshold(img, sobel_kernel=ksize, thresh=(0.7, 1.3))\n",
+    "    combined = np.zeros_like(gradx)\n",
+    "    combined[((gradx >= 1) & (grady >= 1)) | ((mag_binary >= 1) & (dir_binary >= 1))] = 1\n",
+    "    return combined\n",
+    "\n",
+    "\n",
+    "# Test threshold on test image\n",
+    "test_image = read_image(\"./test_images/test5.jpg\")\n",
+    "undist_test_image = distortion_correction(test_image, objpoints, imgpoints)\n",
+    "color_binary = hls_select(undist_test_image,thresh=(170,255))\n",
+    "combined_binary = get_combined_sobel(undist_test_image)\n",
+    "result = cv2.bitwise_or(combined_binary, color_binary)\n",
+    "\n",
+    "plt.figure(figsize=(12, 7))\n",
+    "plt.subplot(2, 2, 1)\n",
+    "plt.imshow(test_image)\n",
+    "plt.title(\"Raw Image\")\n",
+    "print(len(test_image.shape))\n",
+    "\n",
+    "plt.subplot(2, 2, 2)\n",
+    "plt.imshow(combined_binary, cmap=\"gray\")\n",
+    "plt.title(\"Combined Gradiant Threshold Binary\")\n",
+    "#write_image(\"output_images/combined_gradiant_threshold_binary.jpg\", combined_binary)\n",
+    "plt.imsave(\"output_images/combined_gradiant_threshold_binary.jpg\", combined_binary, cmap=\"gray\")\n",
+    "\n",
+    "plt.subplot(2, 2, 3)\n",
+    "plt.imshow(color_binary)\n",
+    "plt.title(\"Color Threshold binary\")\n",
+    "#write_image(\"output_images/color_threshold_binary.jpg\", color_binary)\n",
+    "plt.imsave(\"output_images/color_threshold_binary.jpg\", color_binary)\n",
+    "\n",
+    "plt.subplot(2, 2, 4)\n",
+    "plt.imshow(result, cmap=\"gray\")\n",
+    "print(len(result.shape))\n",
+    "plt.title(\"Combined Color and Gradiant Thresholds\")\n",
+    "#write_image(\"output_images/combined_color_and_gradiant_threshold_binary.jpg\", result)\n",
+    "plt.imsave(\"output_images/combined_color_and_gradiant_threshold_binary.jpg\", result, cmap=\"gray\")\n",
+    "\n",
+    "print(\"Finished threshold binary image\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 37,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "<matplotlib.image.AxesImage at 0x121f71da0>"
+      ]
+     },
+     "execution_count": 37,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Note: img is the undistorted image\n",
+    "def thresholded_binary(undist_img):\n",
+    "    # Convert to HLS color space and separate the S channel\n",
+    "    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)\n",
+    "    s_channel = hls[:,:,2]\n",
+    "\n",
+    "    # Grayscale image\n",
+    "    # NOTE: we already saw that standard grayscaling lost color information for the lane lines\n",
+    "    # Explore gradients in other colors spaces / color channels to see what might work better\n",
+    "    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)\n",
+    "\n",
+    "    # Sobel x\n",
+    "    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0) # Take the derivative in x\n",
+    "    abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal\n",
+    "    scaled_sobel = np.uint8(255*abs_sobelx/np.max(abs_sobelx))\n",
+    "\n",
+    "    # Threshold x gradient\n",
+    "    thresh_min = 20\n",
+    "    thresh_max = 100\n",
+    "    sxbinary = np.zeros_like(scaled_sobel)\n",
+    "    sxbinary[(scaled_sobel >= thresh_min) & (scaled_sobel <= thresh_max)] = 1\n",
+    "\n",
+    "    # Threshold color channel\n",
+    "    s_thresh_min = 170\n",
+    "    s_thresh_max = 255\n",
+    "    s_binary = np.zeros_like(s_channel)\n",
+    "    s_binary[(s_channel >= s_thresh_min) & (s_channel <= s_thresh_max)] = 1\n",
+    "\n",
+    "    # Stack each channel to view their individual contributions in green and blue respectively\n",
+    "    # This returns a stack of the two binary images, whose components you can see as different colors\n",
+    "    color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary))\n",
+    "\n",
+    "    # Combine the two binary thresholds\n",
+    "    combined_binary = np.zeros_like(sxbinary)\n",
+    "    combined_binary[(s_binary == 1) | (sxbinary == 1)] = 1\n",
+    "    \n",
+    "    return color_binary, combined_binary\n",
+    "\n",
+    "thresh_test_img = read_image(\"./test_images/test4.jpg\")\n",
+    "undist_thresh_test_img = distortion_correction(thresh_test_img, objpoints, imgpoints)\n",
+    "color_binary, combined_binary = thresholded_binary(undist_thresh_test_img)\n",
+    "# Plotting thresholded images\n",
+    "f, (ax1, ax2) = plt.subplots(1, 2, figsize=(20,10))\n",
+    "ax1.set_title('Stacked thresholds')\n",
+    "ax1.imshow(color_binary)\n",
+    "\n",
+    "ax2.set_title('Combined S channel and gradient thresholds')\n",
+    "ax2.imshow(combined_binary, cmap='gray')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Apply a perspective transform to rectify binary image (\"birds-eye view\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 38,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "def warped_image(combined_image, orient='M'):\n",
+    "    image_size = (combined_image.shape[1], combined_image.shape[0])\n",
+    "    \n",
+    "\n",
+    "    src = np.float32(\n",
+    "    [[730, 460],\n",
+    "     [1100, 690],\n",
+    "     [200, 695],\n",
+    "     [600, 455]])\n",
+    "    dst = np.float32(\n",
+    "    [[1120, 0],      # top right\n",
+    "     [1120, 680],    # bottom right\n",
+    "     [200, 680],    # bottom left\n",
+    "     [200, 0]])     # top left  \n",
+    "    \n",
+    "    #y_bottom = 720\n",
+    "    #y_top = 470\n",
+    "    #x_bottom_left = 175\n",
+    "    #x_bottom_right = 1210 \n",
+    "    #x_top_left = 450\n",
+    "    #x_top_right = 800\n",
+    "\n",
+    "\n",
+    "    #src = np.float32([[x_bottom_left, y_bottom], [x_bottom_right, y_bottom], [x_top_left, y_top], [x_top_right, y_top]])\n",
+    "    #dst = np.float32([[0,image_size[0]],[image_size[1],image_size[0]],[0,0], [image_size[1],0]])\n",
+    "    if orient == 'M':\n",
+    "        M = cv2.getPerspectiveTransform(src, dst)\n",
+    "        warped = cv2.warpPerspective(combined_image, M, image_size, flags=cv2.INTER_LINEAR)\n",
+    "    if orient == 'Minv':\n",
+    "        Minv = cv2.getPerspectiveTransform(dst, src)\n",
+    "        warped = cv2.warpPerspective(combined_image, Minv, image_size, flags=cv2.INTER_LINEAR)\n",
+    "    return warped\n",
+    "\n",
+    "#testImages = glob.glob('test_images/test*.jpg')\n",
+    "#for i in range(6):\n",
+    "#    image = read_image(testImages[i])\n",
+    "#    undist_image = distortion_correction(thresh_test_img, objpoints, imgpoints)\n",
+    "#    imageWarped = warped_image(undist_image)\n",
+    "#    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15,10))\n",
+    "#    ax1.imshow(image)\n",
+    "#    ax1.set_title('Original Image', fontsize=20)\n",
+    "#    ax2.imshow(imageWarped)\n",
+    "#    ax2.set_title('Bird Eye View', fontsize=20)\n",
+    "\n",
+    "    \n",
+    "hls_binary = hls_select(undist_test_image, thresh=(90, 255))\n",
+    "warped_binary = warped_image(result, orient='M')\n",
+    "\n",
+    "f, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,8))\n",
+    "ax1.imshow(hls_binary, cmap='gray')\n",
+    "ax1.plot(730, 460, '.')    # top right\n",
+    "ax1.plot(1100, 690, '.')   # bottom right\n",
+    "ax1.plot(200, 695, '.')    # bottom left\n",
+    "ax1.plot(600, 455, '.')    # top left\n",
+    "ax1.set_title('HLS Select Image', fontsize=25)\n",
+    "ax2.imshow(warped_binary, cmap=\"gray\")\n",
+    "ax2.set_title('Warped Image', fontsize=25)\n",
+    "\n",
+    "\n",
+    "# Take a histogram of the bottom half of the image\n",
+    "histogram = np.sum(warped_binary[warped_binary.shape[0]//2:,:], axis=0)\n",
+    "plt.figure(figsize=(16,8))\n",
+    "plt.plot(histogram)\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Test pipeline on video"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 42,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "def measure_curvature(leftx, lefty, rightx, righty, ploty, image_size):\n",
+    "    y_eval = np.max(ploty)\n",
+    "    \n",
+    "    # Calculate curvature in pixel-space.\n",
+    "    \n",
+    "    #left_curverad = ((1 + (2*left_fit[0]*y_eval + left_fit[1])**2)**1.5) / np.absolute(2*left_fit[0])\n",
+    "    #right_curverad = ((1 + (2*right_fit[0]*y_eval + right_fit[1])**2)**1.5) / np.absolute(2*right_fit[0])\n",
+    "    #print(left_curverad, right_curverad)\n",
+    "    ## Example values: 1926.74 1908.48\n",
+    "    \n",
+    "    # Convert from pixels to metres.\n",
+    "    \n",
+    "    # Define conversions in x and y from pixels space to meters\n",
+    "    ym_per_pix = 30/720 # meters per pixel in y dimension\n",
+    "    xm_per_pix = 3.7/700 # meters per pixel in x dimension\n",
+    "    \n",
+    "    # Fit new polynomials to x,y in world space\n",
+    "    left_fit_cr = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)\n",
+    "    right_fit_cr = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)\n",
+    "    \n",
+    "    # Calculate the new radii of curvature\n",
+    "    left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])\n",
+    "    right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])\n",
+    "    \n",
+    "    # Now our radius of curvature is in meters\n",
+    "    # Example values: 632.1 m    626.2 m\n",
+    "    \n",
+    "    # Calculate Lane Deviation from center of lane:\n",
+    "    # First we calculate the intercept points at the bottom of our image, then use those to \n",
+    "    # calculate the lane deviation of the vehicle (assuming camera is in center of vehicle)\n",
+    "    scene_height = image_size[0] * ym_per_pix\n",
+    "    scene_width = image_size[1] * xm_per_pix\n",
+    "    \n",
+    "    left_intercept = left_fit_cr[0] * scene_height ** 2 + left_fit_cr[1] * scene_height + left_fit_cr[2]\n",
+    "    right_intercept = right_fit_cr[0] * scene_height ** 2 + right_fit_cr[1] * scene_height + right_fit_cr[2]\n",
+    "    calculated_center = (left_intercept + right_intercept) / 2.0\n",
+    "    \n",
+    "    lane_deviation = (calculated_center - scene_width / 2.0)\n",
+    "    \n",
+    "    return left_curverad, right_curverad, lane_deviation\n",
+    "\n",
+    "def locate_lane_lines(binary_warped):\n",
+    "    # Assuming you have created a warped binary image called \"binary_warped\"\n",
+    "    # Take a histogram of the bottom half of the image\n",
+    "    histogram = np.sum(binary_warped[binary_warped.shape[0]/2:,:], axis=0)\n",
+    "\n",
+    "    # Create an output image to draw on and  visualize the result\n",
+    "    out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255\n",
+    "    # Find the peak of the left and right halves of the histogram\n",
+    "    # These will be the starting point for the left and right lines\n",
+    "    midpoint = np.int(histogram.shape[0]/2)\n",
+    "    leftx_base = np.argmax(histogram[:midpoint])\n",
+    "    rightx_base = np.argmax(histogram[midpoint:]) + midpoint\n",
+    "\n",
+    "    # Choose the number of sliding windows\n",
+    "    nwindows = 9\n",
+    "    # Set height of windows\n",
+    "    window_height = np.int(binary_warped.shape[0]/nwindows)\n",
+    "    # Identify the x and y positions of all nonzero pixels in the image\n",
+    "    nonzero = binary_warped.nonzero()\n",
+    "    nonzeroy = np.array(nonzero[0])\n",
+    "    nonzerox = np.array(nonzero[1])\n",
+    "    # Current positions to be updated for each window\n",
+    "    leftx_current = leftx_base\n",
+    "    rightx_current = rightx_base\n",
+    "    # Set the width of the windows +/- margin\n",
+    "    margin = 100\n",
+    "    # Set minimum number of pixels found to recenter window\n",
+    "    minpix = 50\n",
+    "    # Create empty lists to receive left and right lane pixel indices\n",
+    "    left_lane_inds = []\n",
+    "    right_lane_inds = []\n",
+    "\n",
+    "    # Step through the windows one by one\n",
+    "    for window in range(nwindows):\n",
+    "        # Identify window boundaries in x and y (and right and left)\n",
+    "        win_y_low = binary_warped.shape[0] - (window+1)*window_height\n",
+    "        win_y_high = binary_warped.shape[0] - window*window_height\n",
+    "        win_xleft_low = leftx_current - margin\n",
+    "        win_xleft_high = leftx_current + margin\n",
+    "        win_xright_low = rightx_current - margin\n",
+    "        win_xright_high = rightx_current + margin\n",
+    "        # Draw the windows on the visualization image\n",
+    "        cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) \n",
+    "        cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) \n",
+    "        # Identify the nonzero pixels in x and y within the window\n",
+    "        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]\n",
+    "        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]\n",
+    "        # Append these indices to the lists\n",
+    "        left_lane_inds.append(good_left_inds)\n",
+    "        right_lane_inds.append(good_right_inds)\n",
+    "        # If you found > minpix pixels, recenter next window on their mean position\n",
+    "        if len(good_left_inds) > minpix:\n",
+    "            leftx_current = np.int(np.mean(nonzerox[good_left_inds]))\n",
+    "        if len(good_right_inds) > minpix:        \n",
+    "            rightx_current = np.int(np.mean(nonzerox[good_right_inds]))\n",
+    "\n",
+    "    # Concatenate the arrays of indices\n",
+    "    left_lane_inds = np.concatenate(left_lane_inds)\n",
+    "    right_lane_inds = np.concatenate(right_lane_inds)\n",
+    "\n",
+    "    # Extract left and right line pixel positions\n",
+    "    leftx = nonzerox[left_lane_inds]\n",
+    "    lefty = nonzeroy[left_lane_inds] \n",
+    "    rightx = nonzerox[right_lane_inds]\n",
+    "    righty = nonzeroy[right_lane_inds] \n",
+    "\n",
+    "    # Fit a second order polynomial to each\n",
+    "    left_fit = np.polyfit(lefty, leftx, 2)\n",
+    "    right_fit = np.polyfit(righty, rightx, 2)\n",
+    "    \n",
+    "    # Generate x and y values for plotting\n",
+    "    ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )\n",
+    "    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]\n",
+    "    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]\n",
+    "    \n",
+    "    out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]\n",
+    "    out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]\n",
+    "\n",
+    "    left_curvature, right_curvature, lane_deviation = measure_curvature(leftx, lefty, rightx, righty, ploty, out_img.shape)\n",
+    "    \n",
+    "    return left_fitx, right_fitx, ploty, left_fit, right_fit, out_img, left_curvature, right_curvature, lane_deviation"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 43,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "(720, 0)"
+      ]
+     },
+     "execution_count": 43,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Visualization\n",
+    "# At this point, you're done! But here is how you can visualize the result as well:\n",
+    "left_fitx, right_fitx, ploty, left_fit, right_fit, out_img, left_radius, right_radius, lane_deviation = locate_lane_lines(warped_binary)\n",
+    "plt.imshow(out_img)\n",
+    "plt.plot(left_fitx, ploty, color='yellow')\n",
+    "plt.plot(right_fitx, ploty, color='yellow')\n",
+    "plt.xlim(0, 1280)\n",
+    "plt.ylim(720, 0)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 44,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "binary_warped = warped_binary\n",
+    "# Assume you now have a new warped binary image \n",
+    "# from the next frame of video (also called \"binary_warped\")\n",
+    "# It's now much easier to find line pixels!\n",
+    "nonzero = binary_warped.nonzero()\n",
+    "nonzeroy = np.array(nonzero[0])\n",
+    "nonzerox = np.array(nonzero[1])\n",
+    "margin = 100\n",
+    "left_lane_inds = ((nonzerox > (left_fit[0]*(nonzeroy**2) + left_fit[1]*nonzeroy + left_fit[2] - margin)) & (nonzerox < (left_fit[0]*(nonzeroy**2) + left_fit[1]*nonzeroy + left_fit[2] + margin))) \n",
+    "right_lane_inds = ((nonzerox > (right_fit[0]*(nonzeroy**2) + right_fit[1]*nonzeroy + right_fit[2] - margin)) & (nonzerox < (right_fit[0]*(nonzeroy**2) + right_fit[1]*nonzeroy + right_fit[2] + margin)))  \n",
+    "\n",
+    "# Again, extract left and right line pixel positions\n",
+    "leftx = nonzerox[left_lane_inds]\n",
+    "lefty = nonzeroy[left_lane_inds] \n",
+    "rightx = nonzerox[right_lane_inds]\n",
+    "righty = nonzeroy[right_lane_inds]\n",
+    "# Fit a second order polynomial to each\n",
+    "left_fit = np.polyfit(lefty, leftx, 2)\n",
+    "right_fit = np.polyfit(righty, rightx, 2)\n",
+    "# Generate x and y values for plotting\n",
+    "ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )\n",
+    "left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]\n",
+    "right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 45,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "(720, 0)"
+      ]
+     },
+     "execution_count": 45,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Create an image to draw on and an image to show the selection window\n",
+    "out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255\n",
+    "window_img = np.zeros_like(out_img)\n",
+    "# Color in left and right line pixels\n",
+    "out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]\n",
+    "out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]\n",
+    "\n",
+    "# Generate a polygon to illustrate the search window area\n",
+    "# And recast the x and y points into usable format for cv2.fillPoly()\n",
+    "left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])\n",
+    "left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, ploty])))])\n",
+    "left_line_pts = np.hstack((left_line_window1, left_line_window2))\n",
+    "right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])\n",
+    "right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, ploty])))])\n",
+    "right_line_pts = np.hstack((right_line_window1, right_line_window2))\n",
+    "\n",
+    "# Draw the lane onto the warped blank image\n",
+    "cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))\n",
+    "cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))\n",
+    "result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)\n",
+    "plt.imshow(result)\n",
+    "plt.plot(left_fitx, ploty, color='yellow')\n",
+    "plt.plot(right_fitx, ploty, color='yellow')\n",
+    "plt.xlim(0, 1280)\n",
+    "plt.ylim(720, 0)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 51,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "\n",
+    "#def draw_lanes(binary_warped, undistorted_img, Minv, left_fitx, right_fitx, ploty, left_radius, right_radius, lane_deviation):    \n",
+    "def draw_lanes(binary_warped, undistorted_img, left_fitx, right_fitx, ploty, left_radius, right_radius, lane_deviation):    \n",
+    "    # Create a blank image to draw the lines on\n",
+    "    warp_zero = np.zeros_like(binary_warped).astype(np.uint8)\n",
+    "    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))\n",
+    "    \n",
+    "    # Recast the x and y points into usable format for cv2.fillPoly()\n",
+    "    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])\n",
+    "    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])\n",
+    "    pts = np.hstack((pts_left, pts_right))\n",
+    "    \n",
+    "    # Draw the lane onto the warped blank image\n",
+    "    cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))\n",
+    "    \n",
+    "    # Warp the blank back to original image space using inverse perspective matrix (Minv)\n",
+    "    #newwarp = cv2.warpPerspective(color_warp, Minv, (undistorted_img.shape[1], undistorted_img.shape[0])) \n",
+    "    newwarp = warped_image(color_warp, orient=\"Minv\")\n",
+    "    \n",
+    "    # Combine the result with the original image\n",
+    "    result = cv2.addWeighted(undistorted_img, 1, newwarp, 0.3, 0)\n",
+    "    \n",
+    "    curvature_text = \"Curvature: Left = \" + str(np.round(left_radius, 2)) + \", Right = \" + str(np.round(right_radius, 2)) \n",
+    "    font = cv2.FONT_HERSHEY_SIMPLEX    \n",
+    "    cv2.putText(result, curvature_text, (30, 60), font, 1, (255,255,255), 2)\n",
+    "    deviation_text = \"Lane deviation from center = {:.2f} m\".format(lane_deviation) \n",
+    "    font = cv2.FONT_HERSHEY_SIMPLEX    \n",
+    "    cv2.putText(result, deviation_text, (30, 90), font, 1, (255,255,255), 2)\n",
+    "        \n",
+    "    return result\n",
+    "\n",
+    "left_curvature, right_curvature, lane_deviation = measure_curvature(leftx, lefty, rightx, righty, ploty, binary_warped.shape)\n",
+    "result = draw_lanes(binary_warped, undist_test_image, left_fitx, right_fitx, ploty, left_curvature, right_curvature, lane_deviation)\n",
+    "plt.figure(figsize=(16,8))\n",
+    "plt.imshow(result)\n",
+    "plt.axis(\"off\");\n",
+    "write_image(\"output_images/result.jpg\", result)\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 52,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "def process_video(image):\n",
+    "    \"\"\"\n",
+    "    Execute our image processing pipeline on the provided image.\n",
+    "    \"\"\"    \n",
+    "    undist_test_image = distortion_correction(image, objpoints, imgpoints)\n",
+    "    color_binary = hls_select(undist_test_image,thresh=(170,255))\n",
+    "    combined_binary = get_combined_sobel(undist_test_image)\n",
+    "    combined_binary = cv2.bitwise_or(combined_binary, color_binary)\n",
+    "    binary_warped = warped_image(combined_binary)\n",
+    "    left_fitx, right_fitx, ploty, left_fit, right_fit, out_img, left_curvature, right_curvature, lane_deviation = locate_lane_lines(binary_warped)\n",
+    "    #left_curvature, right_curvature, lane_deviation = measure_curvature(leftx, lefty, rightx, righty, ploty, warped_binary.shape)\n",
+    "    #lane_lines = draw_lanes(binary_warped, undist_test_image, left_fitx, right_fitx, ploty, left_curvature, right_curvature, lane_deviation)\n",
+    "    #left_curvature, right_curvature, lane_deviation = measure_curvature(leftx, lefty, rightx, righty, ploty, out_img.shape)\n",
+    "    #print(left_curvature, right_curvature, lane_deviation)\n",
+    "    lane_lines = draw_lanes(binary_warped, undist_test_image, left_fitx, right_fitx, ploty, left_curvature, right_curvature, lane_deviation)\n",
+    "    return lane_lines"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 53,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "\n",
+    "# Run on a test image\n",
+    "img = cv2.imread(\"test_images/test2.jpg\")\n",
+    "img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)\n",
+    "\n",
+    "result = process_video(img)\n",
+    "\n",
+    "plt.figure(figsize=(16,8))\n",
+    "plt.imshow(result)\n",
+    "plt.axis(\"off\");\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 54,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[MoviePy] >>>> Building video output_images/project_video_output.mp4\n",
+      "[MoviePy] Writing video output_images/project_video_output.mp4\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "100%|█████████▉| 1260/1261 [16:55<00:00,  1.24it/s]\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[MoviePy] Done.\n",
+      "[MoviePy] >>>> Video ready: output_images/project_video_output.mp4 \n",
+      "\n",
+      "CPU times: user 16min 54s, sys: 1min 39s, total: 18min 34s\n",
+      "Wall time: 16min 56s\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Import everything needed to edit/save/watch video clips\n",
+    "from moviepy.editor import VideoFileClip\n",
+    "from IPython.display import HTML\n",
+    "\n",
+    "p4_video_output = \"output_images/project_video_output.mp4\"\n",
+    "clip1 = VideoFileClip(\"project_video.mp4\");\n",
+    "clip1_output = clip1.fl_image(process_video) #NOTE: this function expects color images!!\n",
+    "%time clip1_output.write_videofile(p4_video_output, audio=False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 55,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "\n",
+       "<video width=\"960\" height=\"540\" controls>\n",
+       "  <source src=\"output_images/project_video_output.mp4\">\n",
+       "</video>\n"
+      ],
+      "text/plain": [
+       "<IPython.core.display.HTML object>"
+      ]
+     },
+     "execution_count": 55,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "HTML(\"\"\"\n",
+    "<video width=\"960\" height=\"540\" controls>\n",
+    "  <source src=\"{0}\">\n",
+    "</video>\n",
+    "\"\"\".format(p4_video_output))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "anaconda-cloud": {},
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.5.2"
+  },
+  "widgets": {
+   "state": {},
+   "version": "1.1.2"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 1
+}
